@@ -2,14 +2,16 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    process::Stdio,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::{fs, process::Command};
+use tokio::{fs, io::AsyncReadExt, process::Command, time::timeout};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RunRequest {
     pub files: HashMap<String, String>,
     pub command: String,
+    pub timeout_seconds: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -56,15 +58,61 @@ pub async fn do_run(request: RunRequest) -> anyhow::Result<OkRunResponse> {
             fs::write(&file_path, content).await?;
         }
 
-        let output = Command::new("bash")
+        let mut child = Command::new("bash")
             .arg("-lc")
             .arg(&request.command)
             .current_dir(&working_dir)
-            .output()
-            .await?;
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let mut stdout_pipe = child.stdout.take();
+        let mut stderr_pipe = child.stderr.take();
+
+        let stdout_task = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            if let Some(ref mut out) = stdout_pipe {
+                let _ = out.read_to_end(&mut buf).await;
+            }
+            buf
+        });
+
+        let stderr_task = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            if let Some(ref mut err) = stderr_pipe {
+                let _ = err.read_to_end(&mut buf).await;
+            }
+            buf
+        });
+
+        if request.timeout_seconds > 0 {
+            let duration = Duration::from_secs(request.timeout_seconds);
+            match timeout(duration, child.wait()).await {
+                Ok(wait_res) => {
+                    let _status = wait_res?;
+                }
+                Err(_) => {
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    let _ = stdout_task.await.unwrap_or_default();
+                    let stderr_bytes = stderr_task.await.unwrap_or_default();
+                    let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+                    anyhow::bail!(
+                        "timed out after {} seconds\n{}",
+                        request.timeout_seconds,
+                        stderr
+                    )
+                }
+            }
+        } else {
+            let _status = child.wait().await?;
+        }
+
+        let stdout_bytes = stdout_task.await.unwrap_or_default();
+        let stderr_bytes = stderr_task.await.unwrap_or_default();
+
+        let stdout = String::from_utf8_lossy(&stdout_bytes).to_string();
+        let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
 
         Ok::<OkRunResponse, anyhow::Error>(OkRunResponse { stdout, stderr })
     }
@@ -91,9 +139,8 @@ async fn create_unique_temp_dir() -> anyhow::Result<PathBuf> {
             Ok(_) => return Ok(candidate),
             Err(e) if counter < 10 && e.kind() == std::io::ErrorKind::AlreadyExists => {
                 counter += 1;
-                candidate = base_tmp.join(format!(
-                    "runner-{process_id}-{timestamp_nanos}-{counter}"
-                ));
+                candidate =
+                    base_tmp.join(format!("runner-{process_id}-{timestamp_nanos}-{counter}"));
             }
             Err(e) => return Err(e.into()),
         }

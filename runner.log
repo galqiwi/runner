@@ -1,2 +1,0 @@
-{"request":{"files":{"hello.txt":"hi"},"command":"cat hello.txt"},"response":{"stdout":"hi","stderr":"","error":""}}
-{"request":{"files":{"hello.txt":"hi"},"command":"cat hello.txt"},"response":{"stdout":"hi","stderr":"","error":""}}
