@@ -187,3 +187,20 @@ fn sanitize_and_join(base: &Path, name: &str) -> anyhow::Result<PathBuf> {
 
     Ok(base.join(candidate))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn sanitize_and_join_rules() {
+        let tmp = std::env::temp_dir();
+        // valid
+        assert!(sanitize_and_join(&tmp, "a.txt").is_ok());
+        assert!(sanitize_and_join(&tmp, "dir/a.txt").is_ok());
+        // invalid
+        assert!(sanitize_and_join(&tmp, "/abs").is_err());
+        assert!(sanitize_and_join(&tmp, "../up.txt").is_err());
+        assert!(sanitize_and_join(&tmp, "dir/../up.txt").is_err());
+    }
+}
