@@ -83,7 +83,7 @@ async fn create_unique_temp_dir() -> anyhow::Result<PathBuf> {
         .unwrap_or_default()
         .as_nanos();
 
-    let mut candidate = base_tmp.join(format!("runner-{}-{}", process_id, timestamp_nanos));
+    let mut candidate = base_tmp.join(format!("runner-{process_id}-{timestamp_nanos}"));
 
     let mut counter: u32 = 0;
     loop {
@@ -92,8 +92,7 @@ async fn create_unique_temp_dir() -> anyhow::Result<PathBuf> {
             Err(e) if counter < 10 && e.kind() == std::io::ErrorKind::AlreadyExists => {
                 counter += 1;
                 candidate = base_tmp.join(format!(
-                    "runner-{}-{}-{}",
-                    process_id, timestamp_nanos, counter
+                    "runner-{process_id}-{timestamp_nanos}-{counter}"
                 ));
             }
             Err(e) => return Err(e.into()),

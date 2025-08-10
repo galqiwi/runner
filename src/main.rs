@@ -54,9 +54,9 @@ async fn handle_run(
     let mut response: RunResponse = run(request.clone()).await;
 
     let log_result = log_entry(
-        &*state.log_path,
+        &state.log_path,
         LogEntry {
-            request: request,
+            request,
             response: response.clone(),
         },
     )
