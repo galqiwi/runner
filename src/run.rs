@@ -72,8 +72,7 @@ pub async fn do_run(request: RunRequest) -> anyhow::Result<OkRunResponse> {
             // Create a new session so the spawned process becomes the leader of a new process group
             cmd.pre_exec(|| match setsid() {
                 Ok(_) => Ok(()),
-                Err(err) => Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                Err(err) => Err(std::io::Error::other(
                     format!("setsid failed: {err}"),
                 )),
             });
