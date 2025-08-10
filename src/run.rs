@@ -58,13 +58,28 @@ pub async fn do_run(request: RunRequest) -> anyhow::Result<OkRunResponse> {
             fs::write(&file_path, content).await?;
         }
 
-        let mut child = Command::new("bash")
-            .arg("-lc")
+        // Build the command so we can set up a new process group (session) before spawn
+        let mut cmd = Command::new("bash");
+        cmd.arg("-lc")
             .arg(&request.command)
             .current_dir(&working_dir)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+
+        #[cfg(unix)]
+        unsafe {
+            use nix::unistd::setsid;
+            // Create a new session so the spawned process becomes the leader of a new process group
+            cmd.pre_exec(|| match setsid() {
+                Ok(_) => Ok(()),
+                Err(err) => Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("setsid failed: {err}"),
+                )),
+            });
+        }
+
+        let mut child = cmd.spawn()?;
 
         let mut stdout_pipe = child.stdout.take();
         let mut stderr_pipe = child.stderr.take();
@@ -92,6 +107,19 @@ pub async fn do_run(request: RunRequest) -> anyhow::Result<OkRunResponse> {
                     let _status = wait_res?;
                 }
                 Err(_) => {
+                    // On timeout, send SIGKILL to the entire process group created via setsid()
+                    #[cfg(unix)]
+                    {
+                        use nix::sys::signal::{kill, Signal};
+                        use nix::unistd::Pid;
+                        if let Some(raw_pid_u32) = child.id() {
+                            let pid = raw_pid_u32 as i32;
+                            if pid > 0 {
+                                let _ = kill(Pid::from_raw(-pid), Signal::SIGKILL);
+                            }
+                        }
+                    }
+                    // Fallback: ensure the direct child is also killed
                     let _ = child.kill().await;
                     let _ = child.wait().await;
                     let _ = stdout_task.await.unwrap_or_default();
